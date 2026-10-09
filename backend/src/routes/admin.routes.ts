@@ -115,21 +115,33 @@ function normalizeMobile(value: unknown): string | null {
     return digits;
   }
 
-  // Split a recognised dial code off the front for a canonical "+CC NNNNNNNNNN" form.
+  // The UI sends a canonical "+<code> <subscriber>" with the dial code already
+  // separated by a space. When that explicit boundary is present, trust it: the
+  // part after the space IS the subscriber number, even if it happens to start
+  // with the same digits as the dial code (e.g. an Indian number beginning "91").
+  // The earlier heuristic that sniffed for a repeated prefix produced false
+  // positives on exactly those legitimate numbers.
+  const spaceIdx = raw.indexOf(' ');
+  if (spaceIdx > 0) {
+    const codeDigits = raw.slice(0, spaceIdx).replace(/[^0-9]/g, '');
+    const subscriber = raw.slice(spaceIdx + 1).replace(/[^0-9]/g, '');
+
+    if (subscriber.length >= 6 && DIAL_CODES.includes(codeDigits)) {
+      const candidate = `+${codeDigits} ${subscriber}`;
+      if (candidate.length > MOBILE_MAX_LENGTH) {
+        throw new AppError(400, 'VALIDATION_ERROR', `Phone number must not exceed ${MOBILE_MAX_LENGTH} characters`);
+      }
+      return candidate;
+    }
+  }
+
+  // No explicit separator (e.g. a pasted "+919198765432"): fall back to splitting a
+  // recognised dial code off the front for canonical formatting.
   for (const code of DIAL_CODES) {
     if (!digits.startsWith(code)) continue;
 
     const subscriber = digits.slice(code.length);
     if (subscriber.length < 6) break; // not a real split; fall through
-
-    // A subscriber number that still begins with the same dial code is a doubled prefix.
-    if (subscriber.startsWith(code) && subscriber.length - code.length >= 6) {
-      throw new AppError(
-        400,
-        'VALIDATION_ERROR',
-        `The country code +${code} appears twice in this phone number. Please enter the number without the country code.`
-      );
-    }
 
     const candidate = `+${code} ${subscriber}`;
     if (candidate.length > MOBILE_MAX_LENGTH) {
